@@ -1,29 +1,22 @@
 name: Extract and Release Linux Binary
 
 on:
-  workflow_dispatch: # 只保留纯手动触发，随时随地点击运行
+  workflow_dispatch: 
 
 jobs:
   extract-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # 必须权限：允许在这个仓库创建 Releases 页面
+      contents: write
 
     steps:
       - name: 🔍 获取官方最新版本号
         id: get_version
         run: |
-          echo "正在连接原作者仓库获取真实版本号..."
-          # 通过 GitHub API 自动抓取 aimod-cc/agent2api 的最新 Release Tag
           LATEST_TAG=$(curl -s https://api.github.com/repos/aimod-cc/agent2api/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-          
-          # 防呆机制：如果网络问题没抓到，就用当前运行编号代替
           if [ -z "$LATEST_TAG" ]; then
             LATEST_TAG="v-auto-${{ github.run_number }}"
           fi
-          
-          echo "🎯 成功获取到官方最新版本号: $LATEST_TAG"
-          # 存入环境变量供后面生成 Release 页面使用
           echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_ENV
 
       - name: ⬇️ 拉取官方最新 Docker 镜像
@@ -32,35 +25,26 @@ jobs:
 
       - name: 📦 无损解包提取核心文件
         run: |
-          # 启动镜像并导出完整文件系统
           CID=$(docker create aimodcc/agent2api:latest)
           docker export $CID -o container.tar
           mkdir rootfs && tar -xf container.tar -C rootfs
           
-          mkdir -p ./release_assets
+          mkdir -p release_assets
           
-          # 智能搜索：全局寻找文件名包含 agent2api 的核心程序（精准抓取）
           REAL_BIN=$(find ./rootfs -type f -executable -name "*agent2api*" | head -n 1)
-          
           if [ -z "$REAL_BIN" ]; then
              REAL_BIN=$(find ./rootfs -type f -executable -size +2M | head -n 1)
           fi
           
-          echo "🎯 成功锁定并提取核心程序: $REAL_BIN"
-          cp "$REAL_BIN" ./release_assets/agent2api-linux-amd64
+          cp "$REAL_BIN" release_assets/agent2api-linux-amd64
           
-          # 打包压缩
-          cd ./release_assets
+          cd release_assets
           chmod +x agent2api-linux-amd64
           tar -czvf agent2api-linux-amd64.tar.gz agent2api-linux-amd64
-          
-          echo "📊 提取完毕，最终压缩包信息："
-          ls -lh agent2api-linux-amd64.tar.gz
 
       - name: 🚀 自动发布到 Releases 页面
         uses: softprops/action-gh-release@v2
         with:
-          # 使用第一步自动抓取到的真实版本号，例如：v2.7.7 (构建 #12)
           tag_name: ${{ env.TAG_NAME }}-b${{ github.run_number }}
           name: Agent2API Linux ${{ env.TAG_NAME }}
           body: |
