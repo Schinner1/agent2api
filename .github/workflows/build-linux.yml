@@ -1,25 +1,37 @@
 name: Extract and Release Linux Binary
 
 on:
-  workflow_dispatch: 
-  push:
-    tags:
-      - 'v*'         
+  workflow_dispatch: # 只保留纯手动触发，随时随地点击运行
 
 jobs:
   extract-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write  # 必须权限：允许在这个仓库创建 Releases 页面
 
     steps:
-      - name: Pull Official Docker Image
+      - name: 🔍 获取官方最新版本号
+        id: get_version
+        run: |
+          echo "正在连接原作者仓库获取真实版本号..."
+          # 通过 GitHub API 自动抓取 aimod-cc/agent2api 的最新 Release Tag
+          LATEST_TAG=$(curl -s https://api.github.com/repos/aimod-cc/agent2api/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          
+          # 防呆机制：如果网络问题没抓到，就用当前运行编号代替
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v-auto-${{ github.run_number }}"
+          fi
+          
+          echo "🎯 成功获取到官方最新版本号: $LATEST_TAG"
+          # 存入环境变量供后面生成 Release 页面使用
+          echo "TAG_NAME=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: ⬇️ 拉取官方最新 Docker 镜像
         run: |
           docker pull aimodcc/agent2api:latest
 
-      - name: Extract Binary from Image
+      - name: 📦 无损解包提取核心文件
         run: |
-          echo "📦 正在无损解包提取核心文件..."
           # 启动镜像并导出完整文件系统
           CID=$(docker create aimodcc/agent2api:latest)
           docker export $CID -o container.tar
@@ -27,10 +39,9 @@ jobs:
           
           mkdir -p ./release_assets
           
-          # 智能搜索：全局寻找文件名包含 agent2api 的可执行程序（100%精准）
+          # 智能搜索：全局寻找文件名包含 agent2api 的核心程序（精准抓取）
           REAL_BIN=$(find ./rootfs -type f -executable -name "*agent2api*" | head -n 1)
           
-          # 防呆机制：如果作者连名字都改了，就找大于 2MB 的主程序
           if [ -z "$REAL_BIN" ]; then
              REAL_BIN=$(find ./rootfs -type f -executable -size +2M | head -n 1)
           fi
@@ -38,24 +49,35 @@ jobs:
           echo "🎯 成功锁定并提取核心程序: $REAL_BIN"
           cp "$REAL_BIN" ./release_assets/agent2api-linux-amd64
           
+          # 打包压缩
           cd ./release_assets
           chmod +x agent2api-linux-amd64
-          # 打包成标准 tar.gz
           tar -czvf agent2api-linux-amd64.tar.gz agent2api-linux-amd64
           
-          echo "📊 最终打包文件大小："
+          echo "📊 提取完毕，最终压缩包信息："
           ls -lh agent2api-linux-amd64.tar.gz
 
-      - name: Upload Artifact (For Manual Run)
-        uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch'
-        with:
-          name: agent2api-linux-amd64
-          path: ./release_assets/agent2api-linux-amd64.tar.gz
-
-      - name: Publish GitHub Release (For Tag Push)
+      - name: 🚀 自动发布到 Releases 页面
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ./release_assets/agent2api-linux-amd64.tar.gz
-          generate_release_notes: true
+          # 使用第一步自动抓取到的真实版本号，例如：v2.7.7 (构建 #12)
+          tag_name: ${{ env.TAG_NAME }}-b${{ github.run_number }}
+          name: Agent2API Linux ${{ env.TAG_NAME }}
+          body: |
+            🚀 **Linux 纯净版服务端自动提取包**
+            
+            - **对应官方版本**: `${{ env.TAG_NAME }}`
+            - **提取来源**: 官方最新 Docker 镜像 `aimodcc/agent2api:latest`
+            - **适用环境**: 无法使用 Docker 的 LXC / 纯净 Linux (AMD64)
+            - **文件体积**: 约 4.1 MB
+            
+            ### 💡 如何在小鸡上使用？
+            SSH 连接到你的服务器，依次复制执行以下命令：
+            
+            ```bash
+            # 1. 下载并解压
+            wget https://github.com/${{ github.repository }}/releases/download/${{ env.TAG_NAME }}-b${{ github.run_number }}/agent2api-linux-amd64.tar.gz
+            tar -xzvf agent2api-linux-amd64.tar.gz
+            
+            # 2. 挂后台运行 (会自动释放数据到当前目录的 data 文件夹)
+            nohup ./agent2api-linux-amd64 > agent2api.log 2>&1 &
