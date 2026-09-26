@@ -10,6 +10,10 @@ jobs:
       contents: write
 
     steps:
+      # 1. 核心修复：检出代码，生成 .git 目录供 gh 识别仓库
+      - name: 检出仓库代码环境
+        uses: actions/checkout@v4
+
       - name: 🔍 获取官方最新版本号
         id: get_version
         run: |
@@ -72,8 +76,9 @@ jobs:
           > 启动后，直接浏览器访问 `http://你的IP:3065` 即可打开面板。
           EOF
 
-          # 2. 调用 GitHub 原生 CLI 一键发布（页面与文件强绑定）
+          # 2. 明确加上 --repo 参数，强制绑定当前仓库发布
           gh release create "${{ env.TAG_NAME }}-b${{ github.run_number }}" \
             release_assets/agent2api-linux-amd64.tar.gz \
+            --repo "${{ github.repository }}" \
             --title "Agent2API Linux ${{ env.TAG_NAME }}" \
             --notes-file release_notes.md
