@@ -1,10 +1,10 @@
 name: Extract and Release Linux Binary
 
 on:
-  workflow_dispatch: # 依然支持手动触发
+  workflow_dispatch: 
   push:
     tags:
-      - 'v*'         # 依然支持 Tag 自动触发发布
+      - 'v*'         
 
 jobs:
   extract-release:
@@ -15,33 +15,36 @@ jobs:
     steps:
       - name: Pull Official Docker Image
         run: |
-          echo "⬇️ 正在拉取原作者编译好的最新版 Docker 镜像..."
           docker pull aimodcc/agent2api:latest
 
       - name: Extract Binary from Image
         run: |
           echo "📦 正在无损解包提取核心文件..."
-          # 创建临时容器（无需运行）
-          docker create --name temp-container aimodcc/agent2api:latest
+          # 启动镜像并导出完整文件系统
+          CID=$(docker create aimodcc/agent2api:latest)
+          docker export $CID -o container.tar
+          mkdir rootfs && tar -xf container.tar -C rootfs
           
-          # 导出容器的完整 Linux 文件系统
-          docker export temp-container -o container.tar
-          mkdir rootfs
-          tar -xf container.tar -C rootfs
+          mkdir -p ./release_assets
           
-          mkdir -p ./release_assets/agent2api-linux
+          # 智能搜索：全局寻找文件名包含 agent2api 的可执行程序（100%精准）
+          REAL_BIN=$(find ./rootfs -type f -executable -name "*agent2api*" | head -n 1)
           
-          # 智能提取：将作者存放在 /app 目录下的核心程序与前端静态文件全部提取出来
-          if [ -d "./rootfs/app" ]; then
-            cp -r ./rootfs/app/* ./release_assets/agent2api-linux/
-          else
-            # 防呆设计：如果不在常规目录，自动找出大于 5MB 的独立编译可执行文件
-            find ./rootfs -type f -executable -size +5M -exec cp {} ./release_assets/agent2api-linux/ \;
+          # 防呆机制：如果作者连名字都改了，就找大于 2MB 的主程序
+          if [ -z "$REAL_BIN" ]; then
+             REAL_BIN=$(find ./rootfs -type f -executable -size +2M | head -n 1)
           fi
           
-          # 打包为压缩包
+          echo "🎯 成功锁定并提取核心程序: $REAL_BIN"
+          cp "$REAL_BIN" ./release_assets/agent2api-linux-amd64
+          
           cd ./release_assets
-          tar -czvf agent2api-linux-amd64.tar.gz ./agent2api-linux
+          chmod +x agent2api-linux-amd64
+          # 打包成标准 tar.gz
+          tar -czvf agent2api-linux-amd64.tar.gz agent2api-linux-amd64
+          
+          echo "📊 最终打包文件大小："
+          ls -lh agent2api-linux-amd64.tar.gz
 
       - name: Upload Artifact (For Manual Run)
         uses: actions/upload-artifact@v4
