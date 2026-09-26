@@ -1,55 +1,58 @@
-name: Build and Release Linux Binary
+name: Extract and Release Linux Binary
 
 on:
-  workflow_dispatch: # 保留手动触发功能（随时可以点）
+  workflow_dispatch: # 依然支持手动触发
   push:
     tags:
-      - 'v*'         # 核心触发器：只要同步或推送以 "v" 开头的 Tag (如 v2.7.8) 就会自动触发
+      - 'v*'         # 依然支持 Tag 自动触发发布
 
 jobs:
-  build-and-release:
+  extract-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # 必须权限：允许 Actions 为你的仓库创建 Release 发布页
+      contents: write
 
     steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Install Linux build dependencies
+      - name: Pull Official Docker Image
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev
+          echo "⬇️ 正在拉取原作者编译好的最新版 Docker 镜像..."
+          docker pull aimodcc/agent2api:latest
 
-      - name: Build Headless Server
+      - name: Extract Binary from Image
         run: |
-          # 编译纯后端二进制
-          cargo build --release -p agent2api-server
-
-      - name: Prepare Binary
-        run: |
-          mkdir -p ./release_assets
-          # 将编译好的文件提取出来，重命名为带 amd64 后缀的形式，更规范
-          cp target/release/agent2api-server ./release_assets/agent2api-linux-amd64
-          chmod +x ./release_assets/agent2api-linux-amd64
-          # (可选) 你也可以在这里把它压缩成 tar.gz 方便下载
-          # tar -czvf ./release_assets/agent2api-linux-amd64.tar.gz -C ./release_assets agent2api-linux-amd64
+          echo "📦 正在无损解包提取核心文件..."
+          # 创建临时容器（无需运行）
+          docker create --name temp-container aimodcc/agent2api:latest
+          
+          # 导出容器的完整 Linux 文件系统
+          docker export temp-container -o container.tar
+          mkdir rootfs
+          tar -xf container.tar -C rootfs
+          
+          mkdir -p ./release_assets/agent2api-linux
+          
+          # 智能提取：将作者存放在 /app 目录下的核心程序与前端静态文件全部提取出来
+          if [ -d "./rootfs/app" ]; then
+            cp -r ./rootfs/app/* ./release_assets/agent2api-linux/
+          else
+            # 防呆设计：如果不在常规目录，自动找出大于 5MB 的独立编译可执行文件
+            find ./rootfs -type f -executable -size +5M -exec cp {} ./release_assets/agent2api-linux/ \;
+          fi
+          
+          # 打包为压缩包
+          cd ./release_assets
+          tar -czvf agent2api-linux-amd64.tar.gz ./agent2api-linux
 
       - name: Upload Artifact (For Manual Run)
-        # 如果是你手动点击触发的，把文件传到 Artifacts 里
         uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:
           name: agent2api-linux-amd64
-          path: ./release_assets/agent2api-linux-amd64
+          path: ./release_assets/agent2api-linux-amd64.tar.gz
 
       - name: Publish GitHub Release (For Tag Push)
-        # 如果是 Tag 触发的，直接自动创建 Release 页面并把二进制文件挂载上去
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ./release_assets/agent2api-linux-amd64
-          generate_release_notes: true  # 自动生成更新日志
+          files: ./release_assets/agent2api-linux-amd64.tar.gz
+          generate_release_notes: true
